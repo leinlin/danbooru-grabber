@@ -11,17 +11,13 @@ import base64
 import hashlib
 from PIL import Image
 import time
+import urllib3
 
 status = 'not done yet'
 danbooru_folder = os.getcwd() + '/Pictures/'
 send_count = 0
 post_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=011b602e-8a5d-4829-909f-df8f17d5667e"
 danbooru_url = "https://danbooru.donmai.us"  # type: str
-queryStr = "tags=azur_lane+-rating:safe+order:score&limit=1000"
-dict_cache = {}
-pic_in_url = ""
-pic_out_url = ""
-dict_url = ""
 sleep_time = 180
 
 
@@ -30,24 +26,65 @@ def file_extension(path):
 
 
 def download(id):
-    global dict_url
     try:
+        headers = {"Content-Type": "text/plain"}
         proxies = {'http': 'http://localhost:1080', 'https': 'http://localhost:1080'}
-        r = requests.get(danbooru_url + '/posts/' + id + ".json", proxies=proxies)
+        global post_url
+
+        r = requests.get(danbooru_url + '/posts/' + id + ".json", proxies = proxies, verify = False)
+        print(r.content)
         jsonPost = r.json()
 
+        if jsonPost["fav_count"] < 100 and jsonPost["score"] < 50:
+            return False
+
+        if jsonPost["score"] < 20:
+            return False
+
+        file_url = jsonPost["file_url"]
+
+        if (not file_url.endswith(".jpg")) and (not file_url.endswith(".png")):
+            return False
+
+        rating = jsonPost["rating"]
+
+        # if rating == "e":
+        #     sourceStr = ""
+        #     if u"source" in jsonPost:
+        #         sourceStr = jsonPost[u"source"]
+        #     data = {
+        #         "msgtype": "text",
+        #         "text": {
+        #             "content": '{post_url}{id}\n角色:{character}\n作者:{artist}\n出处:{source}\n涩度:我好了，你也想好吗？（{rating}）\n评分:{score}\n喜欢:{fav_count}'.format(
+        #                 post_url="https://danbooru.me/posts/", id=str(id), artist=jsonPost["tag_string_artist"],
+        #                 character=jsonPost["tag_string_character"],
+        #                 source=sourceStr,
+        #                 rating="https://danbooru.donmai.us/posts/" + str(id),
+        #                 score=jsonPost["score"],
+        #                 fav_count=jsonPost["fav_count"]
+        #             )
+        #         }
+        #     }
+        #     requests.post(post_url, headers=headers, json=data)
+        #     return False
+
+        if rating == "s":
+            rating = "吉良吉影觉得很(b)ok(i)"
+        elif rating == "q":
+            rating = "画画的老师说要把欧派想象成注水的气球"
+        elif rating == "e":
+            rating = "我好了，你也想好吗？"
+
+        print("Download id:" + str(id))
         print("Download file:" + jsonPost["file_url"])
-        sys.stdout.flush()
         request = requests.get(jsonPost["file_url"], timeout=90, proxies=proxies)
         file_size = int(jsonPost["file_size"])
-
-        global pic_in_url
-        global pic_out_url
-
-        with open(pic_in_url, "wb") as f:
+        file_url = "Pictures/" + id + ".jpg"
+        with open(file_url, "wb") as f:
             f.write(request.content)
 
-        im = Image.open(pic_in_url)
+        print(1)
+        im = Image.open(file_url)
         x, y = im.size
         if x > 1920:
             y = y * 1920 / x
@@ -62,27 +99,23 @@ def download(id):
             im = im.transpose(Image.ROTATE_270)
 
         im.mode = "RGB"
-        try:
-            im.save(pic_out_url)
+        if file_size < 2048 * 1024:
+            imgData = request.content
+        else:
+            try:
+                im.save(file_url)
 
-            f = open(pic_out_url, "rb")
-            imgData = f.read()
-            f.close()
-        except BaseException:
-            if file_size < 2048 * 1024:
-                imgData = request.content
-            else:
-                dict_cache[id] = 1
-                f = open(dict_url, 'w')
-                f.write(str(dict_cache))
-                return
+                f = open(file_url, "rb")
+                imgData = f.read()
+                f.close()
+            except BaseException:
+                return False
 
         base64_data = base64.b64encode(imgData)
         md = hashlib.md5()
         md.update(imgData)
         res1 = md.hexdigest()
 
-        headers = {"Content-Type": "text/plain"}
         data = {
             "msgtype": "image",
             "image": {
@@ -90,7 +123,6 @@ def download(id):
                 "md5": res1
             }
         }
-        global post_url
         requests.post(post_url, headers=headers, json=data)
         sourceStr = ""
         if u"source" in jsonPost:
@@ -98,109 +130,48 @@ def download(id):
         data = {
             "msgtype": "text",
             "text": {
-                "content": '{post_url}{id}\n角色:{character}\n作者:{artist}\n出处:{source}'.format(
+                "content": '{post_url}{id}\n角色:{character}\n作者:{artist}\n出处:{source}\n涩度:{rating}\n评分:{score}\n喜欢:{fav_count}'.format(
                     post_url="https://danbooru.me/posts/", id=str(id), artist=jsonPost["tag_string_artist"],
                     character=jsonPost["tag_string_character"],
-                    source=sourceStr
+                    source=sourceStr,
+                    rating=rating,
+                    score=jsonPost["score"],
+                    fav_count=jsonPost["fav_count"]
                 )
             }
         }
         requests.post(post_url, headers=headers, json=data)
-        dict_cache[id] = 1
 
         print("Download complete")
         sys.stdout.flush()
-
-        f = open(dict_url, 'w')
-        f.write(str(dict_cache))
-        f.close()
-
+        return True
     except requests.exceptions.RequestException as e:
         print(e)
 
 
-# request json, get urls of pictures and download them
-def grabber(query_str):
-    global danbooru_url
-    global dict_cache
-
-    proxies = {'http': 'http://localhost:1080', 'https': 'http://localhost:1080'}
-    r = requests.get(danbooru_url + '/post/index.xml?' + query_str, proxies=proxies)
-    xml = parse(r.text, r.apparent_encoding)
-
-    streams = xml["posts"]["post"]
-    # check if all pages have been visited
-    if len(streams) == 0:
-        print("All pictures have been downloaded!")
-        global status
-        status = 'done'
-    else:
-        # check if directory already exists
-        if not os.path.exists(danbooru_folder):
-            os.mkdir(danbooru_folder)
-
-        url = []
-        for post in streams:
-            if ('@file_url' in post) and ('@score' in post):
-                extension = file_extension(post['@file_url'])
-                if (post['@score'] >= 20) and (extension == ".jpg" or extension == ".png"):
-                    url.append(post)
-
-        # download
-        for post in url:
-            id = post["@id"]
-            if not (id in dict_cache):
-                download(id)
-                global send_count
-                send_count = send_count + 1
-                if send_count >= 3:
-                    global sleep_time
-                    time.sleep(sleep_time)
-                    send_count = 0
-                else:
-                    time.sleep(10)
-
-            # urllib.urlretrieve(url, path)
-
-
 def main():
-    global queryStr
     global post_url
-    global pic_in_url
-    global pic_out_url
-    global dict_url
-    global dict_cache
     global sleep_time
+    urllib3.disable_warnings()
+    requests.adapters.DEFAULT_RETRIES = 5
 
     reload(sys)
     sys.setdefaultencoding('utf-8')
 
-    queryStr = "tags=" + sys.argv[1] + "+-rating:safe" #sys.argv[1] + "+-rating:safe"  # "tags=azur_lane+-rating:safe+order:score&limit=1000"  # '
-    post_url = sys.argv[2]
-    sleep_time = int(sys.argv[3])
+    sleep_time = 60
+    id_file = open("id.txt", "r")
+    id = int(id_file.readline()) + 1
 
-    timeStr = "_" + sys.argv[1].split("+", 1)[0]
-
-    pic_in_url = "in" + timeStr + ".jpg"
-    pic_out_url = "out" + timeStr + ".jpg"
-    dict_url = "dict" + timeStr + ".txt"
-
-    if not os.path.exists(dict_url):
-        f = open(dict_url, 'w')
-        f.write("{}")
-        f.close()
-
-    f = open(dict_url, 'r')
-    dict_cache = eval(f.read())
-    f.close()
-
-    n = 1
-    while n <= 1000 and status == 'not done yet':
-        query = queryStr + "&page=" + str(n)
-        print(query)
-        sys.stdout.flush()
-        grabber(query)
-        n = n + 1
+    while id <= 400000001 and status == 'not done yet':
+        try:
+            id = id + 1
+            if download(str(id)):
+                id_file = open("id.txt", "w")
+                id_file.write(str(id))
+                time.sleep(sleep_time)
+        except BaseException as e:
+            time.sleep(1)
+            print(e)
 
     print('Download successful!')
 
