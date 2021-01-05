@@ -99,16 +99,17 @@ def download(id):
             im = im.transpose(Image.ROTATE_270)
 
         im.mode = "RGB"
-        if file_size < 2048 * 1024:
-            imgData = request.content
-        else:
-            try:
-                im.save(file_url)
+        try:
+            im.save(file_url)
 
-                f = open(file_url, "rb")
-                imgData = f.read()
-                f.close()
-            except BaseException:
+            f = open(file_url, "rb")
+            imgData = f.read()
+            f.close()
+        except BaseException as e:
+            print(e)
+            if file_size < 2048 * 1024:
+                imgData = request.content
+            else:
                 return False
 
         base64_data = base64.b64encode(imgData)
@@ -127,6 +128,7 @@ def download(id):
         sourceStr = ""
         if u"source" in jsonPost:
             sourceStr = jsonPost[u"source"]
+
         data = {
             "msgtype": "text",
             "text": {
@@ -141,11 +143,10 @@ def download(id):
             }
         }
         requests.post(post_url, headers=headers, json=data)
-
         print("Download complete")
         sys.stdout.flush()
         return True
-    except requests.exceptions.RequestException as e:
+    except BaseException as e:
         print(e)
 
 
